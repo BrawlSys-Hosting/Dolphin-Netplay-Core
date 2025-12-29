@@ -14,6 +14,9 @@
 #if defined(__HAIKU__)
 #include "Common/GL/GLInterface/BGL.h"
 #endif
+#if defined(DOLPHIN_LIBRETRO)
+#include "Common/GL/GLInterface/Libretro.h"
+#endif
 #if HAVE_X11
 #include "Common/GL/GLInterface/GLX.h"
 #endif
@@ -78,10 +81,19 @@ void* GLContext::GetFuncAddress(const std::string& name)
   return nullptr;
 }
 
+uintptr_t GLContext::GetDefaultFramebuffer() const
+{
+  return 0;
+}
+
 std::unique_ptr<GLContext> GLContext::Create(const WindowSystemInfo& wsi, bool stereo, bool core,
                                              bool prefer_egl, bool prefer_gles)
 {
   std::unique_ptr<GLContext> context;
+#if defined(DOLPHIN_LIBRETRO)
+  if (wsi.type == WindowSystemType::Libretro)
+    context = std::make_unique<GLContextLibretro>();
+#endif
 #if defined(__APPLE__)
   if (wsi.type == WindowSystemType::MacOS || wsi.type == WindowSystemType::Headless)
     context = std::make_unique<GLContextAGL>();

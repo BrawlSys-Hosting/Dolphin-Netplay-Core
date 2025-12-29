@@ -756,6 +756,10 @@ elseif(UNIX)
   endif()
 endif()
 
+if(ENABLE_LIBRETRO)
+  target_compile_definitions(core PRIVATE DOLPHIN_LIBRETRO)
+endif()
+
 # Bluez doesn't support all the communication modes on FreeBSD, so only using it on Linux
 if(LINUX)
   option(ENABLE_BLUEZ "Enables bluetooth support" ON)

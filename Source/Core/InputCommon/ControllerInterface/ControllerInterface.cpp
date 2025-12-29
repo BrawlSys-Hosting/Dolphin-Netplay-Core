@@ -36,6 +36,9 @@
 #ifdef CIFACE_USE_STEAMDECK
 #include "InputCommon/ControllerInterface/SteamDeck/SteamDeck.h"
 #endif
+#ifdef CIFACE_USE_LIBRETRO
+#include "InputCommon/ControllerInterface/Libretro/Libretro.h"
+#endif
 
 ControllerInterface g_controller_interface;
 
@@ -60,6 +63,9 @@ void ControllerInterface::Initialize(const WindowSystemInfo& wsi)
 
 #ifdef CIFACE_USE_WIN32
   m_input_backends.emplace_back(ciface::Win32::CreateInputBackend(this));
+#endif
+#ifdef CIFACE_USE_LIBRETRO
+  m_input_backends.emplace_back(ciface::Libretro::CreateInputBackend(this));
 #endif
 #ifdef CIFACE_USE_XLIB
   m_input_backends.emplace_back(ciface::XInput2::CreateInputBackend(this));

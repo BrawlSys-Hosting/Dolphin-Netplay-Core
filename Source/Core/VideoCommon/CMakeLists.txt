@@ -250,6 +250,10 @@ PRIVATE
   tinygltf
 )
 
+if(ENABLE_LIBRETRO)
+  target_compile_definitions(videocommon PRIVATE DOLPHIN_LIBRETRO)
+endif()
+
 if(_M_X86_64)
   target_sources(videocommon PRIVATE
     TextureDecoder_x64.cpp

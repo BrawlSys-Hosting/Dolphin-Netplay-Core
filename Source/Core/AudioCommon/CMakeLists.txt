@@ -3,6 +3,7 @@ add_library(audiocommon
   AudioCommon.h
   CubebStream.h
   Enums.h
+  LibretroSoundStream.h
   Mixer.cpp
   Mixer.h
   SurroundDecoder.cpp
@@ -12,6 +13,13 @@ add_library(audiocommon
   WaveFile.cpp
   WaveFile.h
 )
+
+if(ENABLE_LIBRETRO)
+  target_sources(audiocommon PRIVATE
+    LibretroSoundStream.cpp
+  )
+  target_compile_definitions(audiocommon PRIVATE DOLPHIN_LIBRETRO)
+endif()
 
 if(ENABLE_CUBEB)
   message(STATUS "Cubeb found, enabling Cubeb sound backend")

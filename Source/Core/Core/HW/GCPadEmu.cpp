@@ -178,6 +178,45 @@ void GCPad::LoadDefaults(const ControllerInterface& ciface)
 {
   EmulatedController::LoadDefaults(ciface);
 
+#ifdef DOLPHIN_LIBRETRO
+  const std::string device =
+      "Libretro/" + std::to_string(m_index) + "/Pad " + std::to_string(m_index + 1);
+  SetDefaultDevice(device);
+
+  // Buttons: A, B, X, Y, Z, Start
+  m_buttons->SetControlExpression(0, "`Button A`");
+  m_buttons->SetControlExpression(1, "`Button B`");
+  m_buttons->SetControlExpression(2, "`Button X`");
+  m_buttons->SetControlExpression(3, "`Button Y`");
+  m_buttons->SetControlExpression(4, "`Shoulder R`");
+  m_buttons->SetControlExpression(5, "`Start`");
+
+  // D-Pad
+  m_dpad->SetControlExpression(0, "`Pad N`");
+  m_dpad->SetControlExpression(1, "`Pad S`");
+  m_dpad->SetControlExpression(2, "`Pad W`");
+  m_dpad->SetControlExpression(3, "`Pad E`");
+
+  // C Stick
+  m_c_stick->SetControlExpression(0, "`Right Y+`");
+  m_c_stick->SetControlExpression(1, "`Right Y-`");
+  m_c_stick->SetControlExpression(2, "`Right X-`");
+  m_c_stick->SetControlExpression(3, "`Right X+`");
+
+  // Control Stick
+  m_main_stick->SetControlExpression(0, "`Left Y+`");
+  m_main_stick->SetControlExpression(1, "`Left Y-`");
+  m_main_stick->SetControlExpression(2, "`Left X-`");
+  m_main_stick->SetControlExpression(3, "`Left X+`");
+
+  // Triggers
+  m_triggers->SetControlExpression(0, "`Trigger L`");
+  m_triggers->SetControlExpression(1, "`Trigger R`");
+  m_triggers->SetControlExpression(2, "`Trigger L`");
+  m_triggers->SetControlExpression(3, "`Trigger R`");
+  return;
+#endif
+
 #ifdef ANDROID
   // Rumble
   m_rumble->SetControlExpression(0, "`Android/0/Device Sensors:Motor 0`");

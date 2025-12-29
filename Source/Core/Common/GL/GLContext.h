@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -43,6 +44,7 @@ public:
   virtual void SwapInterval(int interval);
 
   virtual void* GetFuncAddress(const std::string& name);
+  virtual uintptr_t GetDefaultFramebuffer() const;
 
   // Creates an instance of GLContext specific to the platform we are running on.
   // If successful, the context is made current on the calling thread.

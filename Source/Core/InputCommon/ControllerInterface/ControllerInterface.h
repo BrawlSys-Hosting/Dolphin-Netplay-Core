@@ -38,6 +38,9 @@
 #if defined(HAVE_HIDAPI)
 #define CIFACE_USE_STEAMDECK
 #endif
+#ifdef DOLPHIN_LIBRETRO
+#define CIFACE_USE_LIBRETRO
+#endif
 
 namespace ciface
 {

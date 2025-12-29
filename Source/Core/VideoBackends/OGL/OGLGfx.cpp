@@ -412,6 +412,11 @@ bool OGLGfx::BindBackbuffer(const ClearColor& clear_color)
 {
   CheckForSurfaceChange();
   CheckForSurfaceResize();
+  if (m_system_framebuffer)
+  {
+    const uintptr_t framebuffer = m_main_gl_context->GetDefaultFramebuffer();
+    m_system_framebuffer->SetFBO(static_cast<GLuint>(framebuffer));
+  }
   SetAndClearFramebuffer(m_system_framebuffer.get(), clear_color);
   return true;
 }

@@ -6,6 +6,7 @@
 enum class WindowSystemType
 {
   Headless,
+  Libretro,
   Windows,
   MacOS,
   Android,

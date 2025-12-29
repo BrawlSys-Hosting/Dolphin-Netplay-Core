@@ -17,7 +17,9 @@ void CustomResourceManager::Initialize()
   m_host_config.bits = ShaderHostConfig::GetCurrent().bits;
   m_async_shader_compiler = g_gfx->CreateAsyncShaderCompiler();
 
+#ifndef DOLPHIN_LIBRETRO
   m_async_shader_compiler->StartWorkerThreads(1);  // TODO expose to config
+#endif
 
   m_xfb_event =
       GetVideoEvents().after_frame_event.Register([this](Core::System&) { XFBTriggered(); });

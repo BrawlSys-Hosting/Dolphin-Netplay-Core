@@ -12,10 +12,14 @@ CustomShaderCache::CustomShaderCache()
   m_host_config.bits = ShaderHostConfig::GetCurrent().bits;
 
   m_async_shader_compiler = g_gfx->CreateAsyncShaderCompiler();
+#ifndef DOLPHIN_LIBRETRO
   m_async_shader_compiler->StartWorkerThreads(1);  // TODO
+#endif
 
   m_async_uber_shader_compiler = g_gfx->CreateAsyncShaderCompiler();
+#ifndef DOLPHIN_LIBRETRO
   m_async_uber_shader_compiler->StartWorkerThreads(1);  // TODO
+#endif
 
   m_frame_end_handler = GetVideoEvents().after_frame_event.Register(
       [this](Core::System&) { RetrieveAsyncShaders(); });

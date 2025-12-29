@@ -184,6 +184,19 @@ if(ENABLE_SDL)
   target_compile_definitions(inputcommon PUBLIC HAVE_SDL3=1)
 endif()
 
+if(ENABLE_LIBRETRO)
+  target_sources(inputcommon PRIVATE
+    LibretroInput.cpp
+    LibretroInput.h
+    ControllerInterface/Libretro/Libretro.cpp
+    ControllerInterface/Libretro/Libretro.h
+  )
+  target_include_directories(inputcommon PRIVATE
+    ${CMAKE_SOURCE_DIR}/Externals/libretro
+  )
+  target_compile_definitions(inputcommon PRIVATE DOLPHIN_LIBRETRO)
+endif()
+
 if(MSVC)
   # Add precompiled header
   target_link_libraries(inputcommon PRIVATE use_pch)

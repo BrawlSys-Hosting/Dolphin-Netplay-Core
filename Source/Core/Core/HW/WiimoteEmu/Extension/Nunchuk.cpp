@@ -177,6 +177,23 @@ void Nunchuk::DoState(PointerWrap& p)
 
 void Nunchuk::LoadDefaults()
 {
+#ifdef DOLPHIN_LIBRETRO
+  // Stick
+  m_stick->SetControlExpression(0, "`Left Y+`");  // up
+  m_stick->SetControlExpression(1, "`Left Y-`");  // down
+  m_stick->SetControlExpression(2, "`Left X-`");  // left
+  m_stick->SetControlExpression(3, "`Left X+`");  // right
+
+  // Buttons
+  m_buttons->SetControlExpression(0, "`Shoulder L`");  // C
+  m_buttons->SetControlExpression(1, "`Trigger L`");   // Z
+
+  // Shake
+  for (int i = 0; i < 3; ++i)
+    m_shake->SetControlExpression(i, "`R3`");
+  return;
+#endif
+
 #ifndef ANDROID
   // Stick
   m_stick->SetControlExpression(0, "W");  // up

@@ -8,6 +8,9 @@
 
 #include "AudioCommon/AlsaSoundStream.h"
 #include "AudioCommon/CubebStream.h"
+#ifdef DOLPHIN_LIBRETRO
+#include "AudioCommon/LibretroSoundStream.h"
+#endif
 #include "AudioCommon/Mixer.h"
 #include "AudioCommon/NullSoundStream.h"
 #include "AudioCommon/OpenALStream.h"
@@ -28,6 +31,10 @@ constexpr int AUDIO_VOLUME_MAX = 100;
 
 static std::unique_ptr<SoundStream> CreateSoundStreamForBackend(std::string_view backend)
 {
+#ifdef DOLPHIN_LIBRETRO
+  if (backend == BACKEND_LIBRETRO && LibretroSoundStream::IsValid())
+    return std::make_unique<LibretroSoundStream>();
+#endif
   if (backend == BACKEND_CUBEB && CubebStream::IsValid())
     return std::make_unique<CubebStream>();
   else if (backend == BACKEND_OPENAL && OpenALStream::IsValid())
@@ -94,6 +101,10 @@ void ShutdownSoundStream(Core::System& system)
 
 std::string GetDefaultSoundBackend()
 {
+#ifdef DOLPHIN_LIBRETRO
+  if (LibretroSoundStream::IsValid())
+    return BACKEND_LIBRETRO;
+#endif
 #if defined(ANDROID)
   return BACKEND_OPENSLES;
 #else
@@ -119,6 +130,10 @@ std::vector<std::string> GetSoundBackends()
   std::vector<std::string> backends;
 
   backends.emplace_back(BACKEND_NULLSOUND);
+#ifdef DOLPHIN_LIBRETRO
+  if (LibretroSoundStream::IsValid())
+    backends.emplace_back(BACKEND_LIBRETRO);
+#endif
   if (CubebStream::IsValid())
     backends.emplace_back(BACKEND_CUBEB);
   if (AlsaSound::IsValid())
@@ -158,6 +173,10 @@ bool SupportsVolumeChanges(std::string_view backend)
   // FIXME: this one should ask the backend whether it supports it.
   //       but getting the backend from string etc. is probably
   //       too much just to enable/disable a stupid slider...
+#ifdef DOLPHIN_LIBRETRO
+  if (backend == BACKEND_LIBRETRO)
+    return true;
+#endif
   return backend == BACKEND_CUBEB || backend == BACKEND_OPENAL || backend == BACKEND_WASAPI;
 }
 

@@ -40,6 +40,8 @@ Dolphin includes or links code of the following third-party software projects:
    [BSD 2-Clause](https://github.com/randy408/libspng/blob/master/LICENSE)
 - [libusb](http://libusb.info/):
    [LGPLv2.1+](https://github.com/libusb/libusb/blob/master/COPYING)
+- [libretro](https://www.libretro.com/):
+   [MIT](https://github.com/libretro/libretro-common/blob/master/include/libretro.h)
 - [LLVM](http://llvm.org/):
    [University of Illinois/NCSA Open Source license](http://llvm.org/docs/DeveloperPolicy.html#license)
 - [LZO](http://www.oberhumer.com/opensource/lzo/):

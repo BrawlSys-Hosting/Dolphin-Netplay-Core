@@ -11,6 +11,10 @@ if(ENABLE_NOGUI)
   add_subdirectory(DolphinNoGUI)
 endif()
 
+if(ENABLE_LIBRETRO)
+  add_subdirectory(DolphinLibretro)
+endif()
+
 if(ENABLE_CLI_TOOL)
   add_subdirectory(DolphinTool)
 endif()
