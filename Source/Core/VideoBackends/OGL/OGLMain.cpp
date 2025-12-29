@@ -199,21 +199,33 @@ bool VideoBackend::Initialize(const WindowSystemInfo& wsi)
       GLContext::Create(wsi, g_Config.stereo_mode == StereoMode::QuadBuffer, true, false,
                         Config::Get(Config::GFX_PREFER_GLES));
   if (!main_gl_context)
+  {
+    ERROR_LOG_FMT(VIDEO, "OGL Initialize: failed to create GL context");
     return false;
+  }
 
   if (!FillBackendInfo(main_gl_context.get()))
+  {
+    ERROR_LOG_FMT(VIDEO, "OGL Initialize: FillBackendInfo failed");
     return false;
+  }
 
+  INFO_LOG_FMT(VIDEO, "OGL Initialize: Creating gfx backend");
   auto gfx = std::make_unique<OGLGfx>(std::move(main_gl_context), wsi.render_surface_scale);
+  INFO_LOG_FMT(VIDEO, "OGL Initialize: Initializing ProgramShaderCache");
   ProgramShaderCache::Init();
+  INFO_LOG_FMT(VIDEO, "OGL Initialize: Creating SamplerCache");
   g_sampler_cache = std::make_unique<SamplerCache>();
 
   auto vertex_manager = std::make_unique<VertexManager>();
   auto perf_query = GetPerfQuery(gfx->IsGLES());
   auto bounding_box = std::make_unique<OGLBoundingBox>();
 
-  return InitializeShared(std::move(gfx), std::move(vertex_manager), std::move(perf_query),
-                          std::move(bounding_box));
+  const bool init_ok = InitializeShared(std::move(gfx), std::move(vertex_manager),
+                                        std::move(perf_query), std::move(bounding_box));
+  if (!init_ok)
+    ERROR_LOG_FMT(VIDEO, "OGL Initialize: InitializeShared failed");
+  return init_ok;
 }
 
 void VideoBackend::Shutdown()

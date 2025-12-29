@@ -11,7 +11,7 @@
 #include "InputCommon/ControllerInterface/InputBackend.h"
 #include "InputCommon/LibretroInput.h"
 
-#include "libretro.h"
+#include <libretro.h>
 
 namespace ciface::Libretro
 {

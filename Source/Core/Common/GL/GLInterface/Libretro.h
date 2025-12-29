@@ -20,6 +20,9 @@ struct LibretroGLCallbacks
   unsigned base_width = 0;
   unsigned base_height = 0;
   bool is_gles = false;
+  void* native_display = nullptr;
+  void* native_context = nullptr;
+  uintptr_t native_drawable = 0;
 };
 
 void LibretroSetGLCallbacks(const LibretroGLCallbacks& callbacks);
@@ -28,12 +31,12 @@ const LibretroGLCallbacks& LibretroGetGLCallbacks();
 class GLContextLibretro final : public GLContext
 {
 public:
-  ~GLContextLibretro() override = default;
+  ~GLContextLibretro() override;
 
   bool IsHeadless() const override { return false; }
-  std::unique_ptr<GLContext> CreateSharedContext() override { return nullptr; }
-  bool MakeCurrent() override { return true; }
-  bool ClearCurrent() override { return true; }
+  std::unique_ptr<GLContext> CreateSharedContext() override;
+  bool MakeCurrent() override;
+  bool ClearCurrent() override;
   void Update() override;
   void Swap() override;
   void SwapInterval(int) override {}
@@ -45,4 +48,17 @@ protected:
 
 private:
   void UpdateBackbuffer();
+  bool m_owns_context = true;
+
+#if defined(_WIN32)
+  void* m_dc = nullptr;
+  void* m_context = nullptr;
+  void* m_pbuffer_handle = nullptr;
+  void* m_share_dc = nullptr;
+  void* m_share_context = nullptr;
+#elif defined(HAVE_X11)
+  void* m_display = nullptr;
+  void* m_context = nullptr;
+  uintptr_t m_drawable = 0;
+#endif
 };

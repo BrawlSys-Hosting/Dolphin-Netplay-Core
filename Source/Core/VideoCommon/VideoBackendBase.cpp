@@ -329,13 +329,58 @@ bool VideoBackendBase::InitializeShared(std::unique_ptr<AbstractGfx> gfx,
   g_graphics_mod_manager = std::make_unique<GraphicsModManager>();
   g_widescreen = std::make_unique<WidescreenManager>();
 
-  if (!g_vertex_manager->Initialize() || !g_shader_cache->Initialize() ||
-      !g_perf_query->Initialize() || !g_presenter->Initialize() ||
-      !g_framebuffer_manager->Initialize(g_ActiveConfig.iEFBScale) ||
-      !g_texture_cache->Initialize() ||
-      (g_backend_info.bSupportsBBox && !g_bounding_box->Initialize()) ||
-      !g_graphics_mod_manager->Initialize())
+  if (!g_vertex_manager->Initialize())
   {
+    ERROR_LOG_FMT(VIDEO, "InitializeShared: VertexManager init failed");
+    PanicAlertFmtT("Failed to initialize renderer classes");
+    Shutdown();
+    return false;
+  }
+  if (!g_shader_cache->Initialize())
+  {
+    ERROR_LOG_FMT(VIDEO, "InitializeShared: ShaderCache init failed");
+    PanicAlertFmtT("Failed to initialize renderer classes");
+    Shutdown();
+    return false;
+  }
+  if (!g_perf_query->Initialize())
+  {
+    ERROR_LOG_FMT(VIDEO, "InitializeShared: PerfQuery init failed");
+    PanicAlertFmtT("Failed to initialize renderer classes");
+    Shutdown();
+    return false;
+  }
+  if (!g_presenter->Initialize())
+  {
+    ERROR_LOG_FMT(VIDEO, "InitializeShared: Presenter init failed");
+    PanicAlertFmtT("Failed to initialize renderer classes");
+    Shutdown();
+    return false;
+  }
+  if (!g_framebuffer_manager->Initialize(g_ActiveConfig.iEFBScale))
+  {
+    ERROR_LOG_FMT(VIDEO, "InitializeShared: FramebufferManager init failed");
+    PanicAlertFmtT("Failed to initialize renderer classes");
+    Shutdown();
+    return false;
+  }
+  if (!g_texture_cache->Initialize())
+  {
+    ERROR_LOG_FMT(VIDEO, "InitializeShared: TextureCache init failed");
+    PanicAlertFmtT("Failed to initialize renderer classes");
+    Shutdown();
+    return false;
+  }
+  if (g_backend_info.bSupportsBBox && !g_bounding_box->Initialize())
+  {
+    ERROR_LOG_FMT(VIDEO, "InitializeShared: BoundingBox init failed");
+    PanicAlertFmtT("Failed to initialize renderer classes");
+    Shutdown();
+    return false;
+  }
+  if (!g_graphics_mod_manager->Initialize())
+  {
+    ERROR_LOG_FMT(VIDEO, "InitializeShared: GraphicsModManager init failed");
     PanicAlertFmtT("Failed to initialize renderer classes");
     Shutdown();
     return false;

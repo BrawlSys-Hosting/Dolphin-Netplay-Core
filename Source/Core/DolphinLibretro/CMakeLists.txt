@@ -2,7 +2,7 @@ add_library(dolphin_libretro SHARED
   libretro.cpp
 )
 
-target_include_directories(dolphin_libretro PRIVATE
+target_include_directories(dolphin_libretro BEFORE PRIVATE
   ${CMAKE_SOURCE_DIR}/Externals/libretro
 )
 

@@ -191,7 +191,7 @@ if(ENABLE_LIBRETRO)
     ControllerInterface/Libretro/Libretro.cpp
     ControllerInterface/Libretro/Libretro.h
   )
-  target_include_directories(inputcommon PRIVATE
+  target_include_directories(inputcommon BEFORE PRIVATE
     ${CMAKE_SOURCE_DIR}/Externals/libretro
   )
   target_compile_definitions(inputcommon PRIVATE DOLPHIN_LIBRETRO)

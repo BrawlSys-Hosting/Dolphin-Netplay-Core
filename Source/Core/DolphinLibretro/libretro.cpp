@@ -1,7 +1,7 @@
 // Copyright 2025 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "libretro.h"
+#include <libretro.h>
 
 #include <algorithm>
 #include <array>
@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <iterator>
 #include <map>
 #include <mutex>
@@ -20,11 +21,20 @@
 #include <variant>
 #include <vector>
 
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(HAVE_X11)
+#include <GL/glx.h>
+#include <X11/Xlib.h>
+#endif
+
 #include "Common/Buffer.h"
 #include "Common/CommonPaths.h"
 #include "Common/FileUtil.h"
 #include "Common/GL/GLInterface/Libretro.h"
 #include "Common/HookableEvent.h"
+#include "Common/IniFile.h"
+#include "Common/Logging/LogManager.h"
 #include "Common/MsgHandler.h"
 #include "Common/StringUtil.h"
 #include "Common/Version.h"
@@ -32,6 +42,7 @@
 #include "Core/ARDecrypt.h"
 #include "Core/ActionReplay.h"
 #include "Core/Boot/Boot.h"
+#include "Core/IOS/FS/FileSystem.h"
 #include "Core/BootManager.h"
 #include "Core/ConfigManager.h"
 #include "Core/Config/GraphicsSettings.h"
@@ -72,13 +83,18 @@ std::atomic<bool> s_stop_requested{false};
 bool s_initialized = false;
 bool s_game_loaded = false;
 bool s_hw_render_enabled = false;
-bool s_hw_context_ready = false;
+std::atomic<bool> s_hw_context_ready{false};
 retro_hw_render_callback s_hw_callback{};
 
 std::vector<retro_variable> s_core_options;
 std::vector<std::string> s_core_option_strings;
 
 Common::UniqueBuffer<u8> s_state_buffer;
+
+std::atomic<bool> s_pending_present{false};
+std::atomic<unsigned> s_present_width{0};
+std::atomic<unsigned> s_present_height{0};
+bool s_log_listener_registered = false;
 
 enum class CheatBackend
 {
@@ -120,6 +136,13 @@ struct NetPlayOptionCache
   std::string start_game;
 };
 
+struct PendingBoot
+{
+  std::string path;
+  std::optional<BootSessionData> session;
+  bool is_netplay = false;
+};
+
 class LibretroNetPlayUI;
 
 std::unique_ptr<NetPlay::NetPlayClient> s_netplay_client;
@@ -139,10 +162,16 @@ std::string s_netplay_selected_game_name;
 std::atomic<bool> s_netplay_start_requested{false};
 
 NetPlayOptionCache s_netplay_option_cache;
+std::optional<PendingBoot> s_pending_boot;
 
 constexpr unsigned kDummyWidth = 1;
 constexpr unsigned kDummyHeight = 1;
 std::array<uint32_t, kDummyWidth * kDummyHeight> s_dummy_frame{};
+
+const char* GetCoreOptionValue(const char* key);
+bool ApplyCheats();
+bool BootGameInternal(std::string path, std::optional<BootSessionData> session, bool is_netplay);
+void DeferBoot(std::string path, std::optional<BootSessionData> session, bool is_netplay);
 
 void LogMessage(retro_log_level level, const char* fmt, ...)
 {
@@ -156,6 +185,60 @@ void LogMessage(retro_log_level level, const char* fmt, ...)
     s_log(level, "%s", buffer);
   else
     std::fprintf(stderr, "%s", buffer);
+}
+
+class LibretroLogListener final : public Common::Log::LogListener
+{
+public:
+  void Log(Common::Log::LogLevel level, const char* msg) override
+  {
+    if (!s_log || !msg)
+      return;
+
+    retro_log_level retro_level = RETRO_LOG_INFO;
+    switch (level)
+    {
+    case Common::Log::LogLevel::LERROR:
+      retro_level = RETRO_LOG_ERROR;
+      break;
+    case Common::Log::LogLevel::LWARNING:
+      retro_level = RETRO_LOG_WARN;
+      break;
+    case Common::Log::LogLevel::LNOTICE:
+      retro_level = RETRO_LOG_INFO;
+      break;
+    case Common::Log::LogLevel::LINFO:
+      retro_level = RETRO_LOG_INFO;
+      break;
+    case Common::Log::LogLevel::LDEBUG:
+      retro_level = RETRO_LOG_DEBUG;
+      break;
+    }
+
+    s_log(retro_level, "[dolphin] %s", msg);
+  }
+};
+
+void SetupLibretroLogging()
+{
+  auto* log_manager = Common::Log::LogManager::GetInstance();
+  if (!log_manager)
+    return;
+
+  if (!s_log_listener_registered)
+  {
+    log_manager->RegisterListener(Common::Log::LogListener::LOG_WINDOW_LISTENER,
+                                  std::make_unique<LibretroLogListener>());
+    s_log_listener_registered = true;
+  }
+
+  log_manager->EnableListener(Common::Log::LogListener::LOG_WINDOW_LISTENER, true);
+  log_manager->SetConfigLogLevel(Common::Log::LogLevel::LINFO);
+  log_manager->SetEnable(Common::Log::LogType::BOOT, true);
+  log_manager->SetEnable(Common::Log::LogType::CORE, true);
+  log_manager->SetEnable(Common::Log::LogType::VIDEO, true);
+  log_manager->SetEnable(Common::Log::LogType::HOST_GPU, true);
+  log_manager->SetEnable(Common::Log::LogType::COMMON, true);
 }
 
 size_t AudioSampleBatchShim(const int16_t* data, size_t frames)
@@ -191,12 +274,21 @@ void UpdateLibretroAudioCallback()
   AudioCommon::SetLibretroAudioSampleBatch(nullptr);
 }
 
+void ForceLibretroVideoConfig()
+{
+  Config::SetBaseOrCurrent(Config::GFX_BACKEND_MULTITHREADING, false);
+  Config::SetBaseOrCurrent(Config::GFX_SHADER_COMPILER_THREADS, 0);
+  Config::SetBaseOrCurrent(Config::GFX_SHADER_PRECOMPILER_THREADS, 0);
+  Config::SetBaseOrCurrent(Config::GFX_WAIT_FOR_SHADERS_BEFORE_STARTING, false);
+  Config::SetBaseOrCurrent(Config::GFX_SHADER_COMPILATION_MODE, ShaderCompilationMode::Synchronous);
+}
+
 std::string SanitizeCoreOptionValue(std::string value)
 {
-  ReplaceAll(&value, "|", "/");
-  ReplaceAll(&value, ";", "/");
-  ReplaceAll(&value, "\n", " ");
-  ReplaceAll(&value, "\r", " ");
+  value = ReplaceAll(std::move(value), "|", "/");
+  value = ReplaceAll(std::move(value), ";", "/");
+  value = ReplaceAll(std::move(value), "\n", " ");
+  value = ReplaceAll(std::move(value), "\r", " ");
   return value;
 }
 
@@ -361,32 +453,14 @@ public:
     if (s_game_loaded)
       return;
 
-    auto boot =
-        BootParameters::GenerateFromFile(filename, std::move(*boot_session_data));
-    if (!boot)
+    BootSessionData session = std::move(*boot_session_data);
+    if (!s_hw_context_ready.load())
     {
-      LogMessage(RETRO_LOG_ERROR, "NetPlay boot failed for %s\n", filename.c_str());
+      DeferBoot(filename, std::move(session), true);
       return;
     }
 
-    auto& system = Core::System::GetInstance();
-    if (!s_state_hook)
-    {
-      s_state_hook = Core::AddOnStateChangedCallback([](Core::State state) {
-        if (state == Core::State::Uninitialized)
-          s_game_loaded = false;
-      });
-    }
-
-    DolphinAnalytics::Instance().ReportDolphinStart("libretro");
-    if (!BootManager::BootCore(system, std::move(boot), s_wsi))
-    {
-      LogMessage(RETRO_LOG_ERROR, "NetPlay failed to boot %s\n", filename.c_str());
-      return;
-    }
-
-    s_game_loaded = true;
-    ApplyCheats();
+    BootGameInternal(filename, std::move(session), true);
   }
 
   void StopGame() override { s_stop_requested.store(true); }
@@ -524,11 +598,15 @@ public:
     if (device_number < 0 || device_number >= 4)
       return {};
 
+#ifdef HAS_LIBMGBA
     const std::string path = Config::Get(Config::MAIN_GBA_ROM_PATHS[device_number]);
     if (path.empty() || !File::Exists(path))
       return {};
 
     return path;
+#else
+    return {};
+#endif
   }
 
   void ShowGameDigestDialog(const std::string& title) override
@@ -627,6 +705,43 @@ void SetUserDirectoryFromEnvironment()
   UICommon::CreateDirectories();
 }
 
+void SetSystemDirectoryFromEnvironment()
+{
+  const char* system_dir = nullptr;
+  if (s_environment)
+    s_environment(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &system_dir);
+
+  std::string base_dir;
+  if (system_dir && system_dir[0])
+  {
+    base_dir = system_dir;
+  }
+  else if (s_environment)
+  {
+    const char* libretro_path = nullptr;
+    if (s_environment(RETRO_ENVIRONMENT_GET_LIBRETRO_PATH, &libretro_path) && libretro_path &&
+        libretro_path[0])
+    {
+      std::filesystem::path core_path = libretro_path;
+      std::filesystem::path core_dir = core_path.parent_path();
+      if (core_dir.filename() == "cores")
+        base_dir = core_dir.parent_path().string();
+      else
+        base_dir = core_dir.string();
+      base_dir += std::string(1, DIR_SEP_CHR) + "system";
+    }
+  }
+
+  if (base_dir.empty())
+    return;
+
+  if (!base_dir.empty() && base_dir.back() == DIR_SEP_CHR)
+    base_dir.pop_back();
+  base_dir += std::string(1, DIR_SEP_CHR) + "Dolphin" + DIR_SEP_CHR + "Sys";
+  LogMessage(RETRO_LOG_INFO, "Using Sys directory: %s\n", base_dir.c_str());
+  File::SetSysDirectory(std::move(base_dir));
+}
+
 void StopCore()
 {
   auto& system = Core::System::GetInstance();
@@ -637,41 +752,13 @@ void StopCore()
 
 void PresentFrame(unsigned width, unsigned height)
 {
-  if (s_video_refresh)
-    s_video_refresh(RETRO_HW_FRAME_BUFFER_VALID, width, height, 0);
+  s_present_width.store(width);
+  s_present_height.store(height);
+  s_pending_present.store(true);
 }
 
-void OnHWContextReset()
+void UpdateLibretroGLCallbacks()
 {
-  s_hw_context_ready = true;
-}
-
-void OnHWContextDestroy()
-{
-  s_hw_context_ready = false;
-}
-
-bool SetupHardwareRendering()
-{
-  if (!s_environment)
-    return false;
-
-  s_hw_context_ready = false;
-  s_environment(RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT, nullptr);
-
-  s_hw_callback = {};
-  s_hw_callback.context_type = RETRO_HW_CONTEXT_OPENGL_CORE;
-  s_hw_callback.context_reset = OnHWContextReset;
-  s_hw_callback.context_destroy = OnHWContextDestroy;
-  s_hw_callback.version_major = 3;
-  s_hw_callback.version_minor = 2;
-  s_hw_callback.cache_context = false;
-  s_hw_callback.debug_context = false;
-  s_hw_callback.bottom_left_origin = true;
-
-  if (!s_environment(RETRO_ENVIRONMENT_SET_HW_RENDER, &s_hw_callback))
-    return false;
-
   LibretroGLCallbacks callbacks{};
   callbacks.get_proc_address =
       reinterpret_cast<LibretroGLCallbacks::GetProcAddress>(s_hw_callback.get_proc_address);
@@ -682,9 +769,52 @@ bool SetupHardwareRendering()
   callbacks.base_height = 528;
   callbacks.is_gles = (s_hw_callback.context_type == RETRO_HW_CONTEXT_OPENGLES2 ||
                        s_hw_callback.context_type == RETRO_HW_CONTEXT_OPENGLES3);
+#if defined(_WIN32)
+  callbacks.native_display = wglGetCurrentDC();
+  callbacks.native_context = wglGetCurrentContext();
+#elif defined(HAVE_X11)
+  callbacks.native_display = glXGetCurrentDisplay();
+  callbacks.native_context = glXGetCurrentContext();
+  callbacks.native_drawable = glXGetCurrentDrawable();
+#endif
   LibretroSetGLCallbacks(callbacks);
+}
 
-  return callbacks.get_proc_address != nullptr;
+void OnHWContextReset()
+{
+  s_hw_context_ready.store(true);
+  UpdateLibretroGLCallbacks();
+}
+
+void OnHWContextDestroy()
+{
+  s_hw_context_ready.store(false);
+  LibretroSetGLCallbacks(LibretroGLCallbacks{});
+}
+
+bool SetupHardwareRendering()
+{
+  if (!s_environment)
+    return false;
+
+  s_hw_context_ready.store(false);
+  bool shared_context = true;
+  s_environment(RETRO_ENVIRONMENT_SET_HW_SHARED_CONTEXT, &shared_context);
+
+  s_hw_callback = {};
+  s_hw_callback.context_type = RETRO_HW_CONTEXT_OPENGL_CORE;
+  s_hw_callback.context_reset = OnHWContextReset;
+  s_hw_callback.context_destroy = OnHWContextDestroy;
+  s_hw_callback.version_major = 3;
+  s_hw_callback.version_minor = 3;
+  s_hw_callback.cache_context = false;
+  s_hw_callback.debug_context = false;
+  s_hw_callback.bottom_left_origin = true;
+
+  if (!s_environment(RETRO_ENVIRONMENT_SET_HW_RENDER, &s_hw_callback))
+    return false;
+
+  return true;
 }
 
 void SubmitDummyFrame()
@@ -693,6 +823,47 @@ void SubmitDummyFrame()
     return;
   s_video_refresh(s_dummy_frame.data(), kDummyWidth, kDummyHeight,
                   kDummyWidth * sizeof(uint32_t));
+}
+
+bool BootGameInternal(std::string path, std::optional<BootSessionData> session, bool is_netplay)
+{
+  auto boot = session ? BootParameters::GenerateFromFile(std::move(path), std::move(*session)) :
+                        BootParameters::GenerateFromFile(std::move(path));
+  if (!boot)
+  {
+    LogMessage(RETRO_LOG_ERROR, "%s boot failed: invalid boot parameters\n",
+               is_netplay ? "NetPlay" : "Game");
+    return false;
+  }
+
+  auto& system = Core::System::GetInstance();
+  if (!s_state_hook)
+  {
+    s_state_hook = Core::AddOnStateChangedCallback([](Core::State state) {
+      if (state == Core::State::Uninitialized)
+        s_game_loaded = false;
+    });
+  }
+
+  DolphinAnalytics::Instance().ReportDolphinStart("libretro");
+  if (!BootManager::BootCore(system, std::move(boot), s_wsi))
+  {
+    LogMessage(RETRO_LOG_ERROR, "%s failed to boot\n", is_netplay ? "NetPlay" : "Game");
+    return false;
+  }
+
+  s_game_loaded = true;
+  ApplyCheats();
+  return true;
+}
+
+void DeferBoot(std::string path, std::optional<BootSessionData> session, bool is_netplay)
+{
+  PendingBoot pending;
+  pending.path = std::move(path);
+  pending.session = std::move(session);
+  pending.is_netplay = is_netplay;
+  s_pending_boot = std::move(pending);
 }
 
 std::string GetEnabledDisabled(bool enabled)
@@ -727,8 +898,6 @@ std::string GetInternalResolutionDefault()
 
   return "1x";
 }
-
-const char* GetCoreOptionValue(const char* key);
 
 std::string GetOptionDefault(const char* key, const std::string& fallback, bool use_current_values)
 {
@@ -1460,7 +1629,7 @@ std::vector<std::string> SplitCheatLines(const char* code)
       continue;
     if (ch == '\n' || ch == ';')
     {
-      std::string trimmed = StripWhitespace(current);
+      std::string trimmed(StripWhitespace(current));
       if (!trimmed.empty())
         lines.push_back(std::move(trimmed));
       current.clear();
@@ -1469,7 +1638,7 @@ std::vector<std::string> SplitCheatLines(const char* code)
     current.push_back(ch);
   }
 
-  std::string trimmed = StripWhitespace(current);
+  std::string trimmed(StripWhitespace(current));
   if (!trimmed.empty())
     lines.push_back(std::move(trimmed));
 
@@ -1571,10 +1740,10 @@ LibretroCheat BuildCheat(unsigned index, bool enabled, const char* code)
 
   std::string prefix = lines.front();
   std::string prefix_lower = prefix;
-  ToLower(&prefix_lower);
+  Common::ToLower(&prefix_lower);
   if (prefix_lower.starts_with("gecko:"))
   {
-    lines.front() = StripWhitespace(prefix.substr(6));
+    lines.front() = std::string(StripWhitespace(prefix.substr(6)));
     if (lines.front().empty())
       lines.erase(lines.begin());
     cheat.backend = CheatBackend::Gecko;
@@ -1582,7 +1751,7 @@ LibretroCheat BuildCheat(unsigned index, bool enabled, const char* code)
   else if (prefix_lower.starts_with("ar:") || prefix_lower.starts_with("actionreplay:"))
   {
     const size_t prefix_len = prefix_lower.starts_with("ar:") ? 3 : 13;
-    lines.front() = StripWhitespace(prefix.substr(prefix_len));
+    lines.front() = std::string(StripWhitespace(prefix.substr(prefix_len)));
     if (lines.front().empty())
       lines.erase(lines.begin());
     cheat.backend = CheatBackend::ActionReplay;
@@ -1785,19 +1954,22 @@ RETRO_API void retro_init(void)
   s_wsi.render_window = nullptr;
   s_wsi.render_surface = nullptr;
 
+  SetSystemDirectoryFromEnvironment();
   SetUserDirectoryFromEnvironment();
 
   UICommon::Init();
+  SetupLibretroLogging();
   BuildCoreOptions(false);
   ApplyCoreOptions();
   ApplyNetPlayOptions();
+  ForceLibretroVideoConfig();
+  ForceLibretroVideoConfig();
   UICommon::InitControllers(s_wsi);
   Common::RegisterMsgAlertHandler(LibretroMsgAlertHandler);
 
   Config::SetBaseOrCurrent(Config::MAIN_GFX_BACKEND, OGL::VideoBackend::CONFIG_NAME);
   Config::SetBaseOrCurrent(Config::MAIN_AUDIO_BACKEND, BACKEND_LIBRETRO);
   Config::SetBaseOrCurrent(Config::MAIN_DPL2_DECODER, false);
-  Config::SetBaseOrCurrent(Config::GFX_SHADER_COMPILATION_MODE, ShaderCompilationMode::Synchronous);
   VideoBackendBase::ActivateBackend(Config::Get(Config::MAIN_GFX_BACKEND));
 
   s_initialized = true;
@@ -1830,10 +2002,11 @@ RETRO_API void retro_deinit(void)
   s_loaded_game_file.reset();
   s_loaded_game_path.clear();
   s_netplay_option_cache = {};
+  s_pending_boot.reset();
   s_game_loaded = false;
   s_initialized = false;
   s_hw_render_enabled = false;
-  s_hw_context_ready = false;
+  s_hw_context_ready.store(false);
 }
 
 RETRO_API void retro_get_system_info(struct retro_system_info* info)
@@ -1873,6 +2046,8 @@ RETRO_API bool retro_load_game(const struct retro_game_info* info)
   if (!s_initialized || !info || !info->path)
     return false;
 
+  SetSystemDirectoryFromEnvironment();
+
   s_hw_render_enabled = SetupHardwareRendering();
   if (!s_hw_render_enabled)
   {
@@ -1886,39 +2061,24 @@ RETRO_API bool retro_load_game(const struct retro_game_info* info)
   ApplyNetPlayOptions();
 
   const NetPlayMode netplay_mode = GetNetPlayMode();
+  s_loaded_game_path = info->path;
+  s_loaded_game_file = std::make_shared<UICommon::GameFile>(s_loaded_game_path);
   if (netplay_mode != NetPlayMode::Disabled)
   {
-    s_loaded_game_path = info->path;
-    s_loaded_game_file = std::make_shared<UICommon::GameFile>(s_loaded_game_path);
-
     if (!StartNetPlaySession())
       return false;
 
     return true;
   }
 
-  auto boot = BootParameters::GenerateFromFile(info->path);
-  if (!boot)
+  if (!s_hw_context_ready.load())
   {
-    LogMessage(RETRO_LOG_ERROR, "Failed to parse boot parameters for %s\n", info->path);
-    return false;
+    DeferBoot(s_loaded_game_path, std::nullopt, false);
+    return true;
   }
 
-  auto& system = Core::System::GetInstance();
-  s_state_hook = Core::AddOnStateChangedCallback([](Core::State state) {
-    if (state == Core::State::Uninitialized)
-      s_game_loaded = false;
-  });
-
-  DolphinAnalytics::Instance().ReportDolphinStart("libretro");
-  if (!BootManager::BootCore(system, std::move(boot), s_wsi))
-  {
-    LogMessage(RETRO_LOG_ERROR, "Failed to boot %s\n", info->path);
+  if (!BootGameInternal(s_loaded_game_path, std::nullopt, false))
     return false;
-  }
-
-  s_game_loaded = true;
-  ApplyCheats();
   return true;
 }
 
@@ -1929,6 +2089,7 @@ RETRO_API void retro_unload_game(void)
     StopCore();
   s_game_loaded = false;
   s_hw_render_enabled = false;
+  s_pending_boot.reset();
   s_loaded_game_file.reset();
   s_loaded_game_path.clear();
 }
@@ -1972,8 +2133,22 @@ RETRO_API void retro_run(void)
   if (s_netplay_start_requested.exchange(false))
     StartNetPlayGame();
 
+  if (!s_game_loaded && s_pending_boot && s_hw_context_ready.load())
+  {
+    PendingBoot pending = std::move(*s_pending_boot);
+    s_pending_boot.reset();
+    BootGameInternal(std::move(pending.path), std::move(pending.session), pending.is_netplay);
+  }
+
   if (s_game_loaded)
     Core::HostDispatchJobs(Core::System::GetInstance());
+
+  if (s_pending_present.exchange(false) && s_video_refresh)
+  {
+    const unsigned width = s_present_width.load();
+    const unsigned height = s_present_height.load();
+    s_video_refresh(RETRO_HW_FRAME_BUFFER_VALID, width, height, 0);
+  }
 
   if (!s_game_loaded || !s_hw_render_enabled)
     SubmitDummyFrame();

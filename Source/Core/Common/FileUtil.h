@@ -236,9 +236,9 @@ std::string GetThemeDir(const std::string& theme_name);
 
 // Returns the path to where the sys file are
 const std::string& GetSysDirectory();
+void SetSysDirectory(const std::string& path);
 
 #ifdef ANDROID
-void SetSysDirectory(const std::string& path);
 void SetGpuDriverDirectories(const std::string& path, const std::string& lib_path);
 const std::string GetGpuDriverDirectory(unsigned int dir_index);
 #endif

@@ -73,6 +73,7 @@ static std::string s_android_sys_directory;
 static std::string s_android_driver_directory;
 static std::string s_android_lib_directory;
 #endif
+static std::string s_sys_directory_override;
 
 #ifdef __APPLE__
 static Common::DynamicLibrary s_security_framework;
@@ -795,18 +796,31 @@ static std::string CreateSysDirectoryPath()
 const std::string& GetSysDirectory()
 {
   static const std::string sys_directory = CreateSysDirectoryPath();
+  if (!s_sys_directory_override.empty())
+    return s_sys_directory_override;
   return sys_directory;
 }
 
-#ifdef ANDROID
 void SetSysDirectory(const std::string& path)
 {
-  INFO_LOG_FMT(COMMON, "Setting Sys directory to {}", path);
+  if (path.empty())
+    return;
+
+  std::string normalized = path;
+  if (!normalized.empty() && normalized.back() == DIR_SEP_CHR)
+    normalized.pop_back();
+
+  s_sys_directory_override = normalized + DIR_SEP;
+  INFO_LOG_FMT(COMMON, "Setting Sys directory to {}", s_sys_directory_override);
+
+#ifdef ANDROID
   ASSERT_MSG(COMMON, s_android_sys_directory.empty(), "Sys directory already set to {}",
              s_android_sys_directory);
-  s_android_sys_directory = path;
+  s_android_sys_directory = normalized;
+#endif
 }
 
+#ifdef ANDROID
 void SetGpuDriverDirectories(const std::string& path, const std::string& lib_path)
 {
   INFO_LOG_FMT(COMMON, "Setting Driver directory to {} and library path to {}", path, lib_path);
