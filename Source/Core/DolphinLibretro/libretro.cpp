@@ -120,6 +120,13 @@ enum class NetPlayMode
   Join,
 };
 
+enum class NetPlayLanMode
+{
+  Disabled,
+  Host,
+  Join,
+};
+
 enum class NetPlayConnection
 {
   Direct,
@@ -129,6 +136,7 @@ enum class NetPlayConnection
 
 struct NetPlayOptionCache
 {
+  std::string lan_mode;
   std::string mode;
   std::string connection;
   std::string room;
@@ -326,8 +334,28 @@ std::string GetNetPlayRoomName()
   return s_loaded_game_file->GetNetPlayName(title_database);
 }
 
+NetPlayLanMode GetNetPlayLanMode()
+{
+  const char* value = GetCoreOptionValue("dolphin_netplay_lan_mode");
+  if (!value)
+    return NetPlayLanMode::Disabled;
+
+  if (std::string_view(value) == "host")
+    return NetPlayLanMode::Host;
+  if (std::string_view(value) == "join")
+    return NetPlayLanMode::Join;
+
+  return NetPlayLanMode::Disabled;
+}
+
 NetPlayMode GetNetPlayMode()
 {
+  const NetPlayLanMode lan_mode = GetNetPlayLanMode();
+  if (lan_mode == NetPlayLanMode::Host)
+    return NetPlayMode::Host;
+  if (lan_mode == NetPlayLanMode::Join)
+    return NetPlayMode::Join;
+
   const char* value = GetCoreOptionValue("dolphin_netplay_mode");
   if (!value)
     return NetPlayMode::Disabled;
@@ -342,6 +370,9 @@ NetPlayMode GetNetPlayMode()
 
 NetPlayConnection GetNetPlayConnection()
 {
+  if (GetNetPlayLanMode() != NetPlayLanMode::Disabled)
+    return NetPlayConnection::Direct;
+
   const char* value = GetCoreOptionValue("dolphin_netplay_connection");
   if (!value)
     return NetPlayConnection::Direct;
@@ -700,6 +731,11 @@ void SetUserDirectoryFromEnvironment()
   if (!user_dir.empty() && user_dir.back() == DIR_SEP_CHR)
     user_dir.pop_back();
   user_dir += std::string(1, DIR_SEP_CHR) + "Dolphin";
+  const NetPlayLanMode lan_mode = GetNetPlayLanMode();
+  if (lan_mode == NetPlayLanMode::Host)
+    user_dir += "-LANHost";
+  else if (lan_mode == NetPlayLanMode::Join)
+    user_dir += "-LANJoin";
 
   UICommon::SetUserDirectory(user_dir);
   UICommon::CreateDirectories();
@@ -933,6 +969,24 @@ void AddCoreOption(const char* key, const char* description,
   s_core_options.push_back({key, s_core_option_strings.back().c_str()});
 }
 
+void BuildEarlyCoreOptions()
+{
+  if (!s_environment)
+    return;
+
+  s_core_options.clear();
+  s_core_option_strings.clear();
+
+  s_core_options.reserve(2);
+  s_core_option_strings.reserve(1);
+
+  AddCoreOption("dolphin_netplay_lan_mode", "NetPlay LAN mode (localhost)",
+                {"disabled", "host", "join"}, "disabled");
+
+  s_core_options.push_back({nullptr, nullptr});
+  s_environment(RETRO_ENVIRONMENT_SET_VARIABLES, s_core_options.data());
+}
+
 void BuildCoreOptions(bool use_current_values = false)
 {
   if (!s_environment)
@@ -941,7 +995,7 @@ void BuildCoreOptions(bool use_current_values = false)
   s_core_options.clear();
   s_core_option_strings.clear();
 
-  constexpr size_t option_count = 41;
+  constexpr size_t option_count = 42;
   s_core_options.reserve(option_count + 1);
   s_core_option_strings.reserve(option_count);
 
@@ -1004,6 +1058,9 @@ void BuildCoreOptions(bool use_current_values = false)
                     GetWiimoteSourceString(Config::Get(Config::GetInfoForWiimoteSource(3))),
                     use_current_values));
 
+  AddCoreOption("dolphin_netplay_lan_mode", "NetPlay LAN mode (localhost)",
+                {"disabled", "host", "join"},
+                GetOptionDefault("dolphin_netplay_lan_mode", "disabled", use_current_values));
   AddCoreOption("dolphin_netplay_mode", "NetPlay mode", {"disabled", "host", "join"},
                 GetOptionDefault("dolphin_netplay_mode", "disabled", use_current_values));
   AddCoreOption("dolphin_netplay_connection", "NetPlay connection",
@@ -1306,6 +1363,26 @@ bool ApplyNetPlayOptions()
   changed |= ApplyU32Option("dolphin_netplay_client_buffer_size", Config::NETPLAY_CLIENT_BUFFER_SIZE,
                             1, 5);
 
+  const NetPlayLanMode lan_mode = GetNetPlayLanMode();
+  if (lan_mode != NetPlayLanMode::Disabled)
+  {
+    if (Config::Get(Config::NETPLAY_ADDRESS) != "127.0.0.1")
+    {
+      Config::SetCurrent(Config::NETPLAY_ADDRESS, "127.0.0.1");
+      changed = true;
+    }
+    if (Config::Get(Config::NETPLAY_USE_INDEX))
+    {
+      Config::SetCurrent(Config::NETPLAY_USE_INDEX, false);
+      changed = true;
+    }
+    if (!Config::Get(Config::NETPLAY_HOST_CODE).empty())
+    {
+      Config::SetCurrent(Config::NETPLAY_HOST_CODE, std::string{});
+      changed = true;
+    }
+  }
+
   if (changed)
     Config::Save();
   return changed;
@@ -1594,7 +1671,11 @@ void UpdateNetPlayOptions()
 
   std::string mode;
   update_cached("dolphin_netplay_mode", &s_netplay_option_cache.mode, &mode);
-  if (mode == "disabled" && (s_netplay_client || s_netplay_server))
+  std::string lan_mode;
+  update_cached("dolphin_netplay_lan_mode", &s_netplay_option_cache.lan_mode, &lan_mode);
+
+  const NetPlayMode effective_mode = GetNetPlayMode();
+  if (effective_mode == NetPlayMode::Disabled && (s_netplay_client || s_netplay_server))
   {
     if (s_game_loaded)
       s_stop_requested.store(true);
@@ -1954,6 +2035,7 @@ RETRO_API void retro_init(void)
   s_wsi.render_window = nullptr;
   s_wsi.render_surface = nullptr;
 
+  BuildEarlyCoreOptions();
   SetSystemDirectoryFromEnvironment();
   SetUserDirectoryFromEnvironment();
 
