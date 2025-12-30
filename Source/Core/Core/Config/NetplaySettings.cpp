@@ -7,7 +7,7 @@
 
 namespace Config
 {
-static constexpr u16 DEFAULT_LISTEN_PORT = 2626;
+static constexpr u16 DEFAULT_LISTEN_PORT = 43210;
 
 // Configuration Information
 

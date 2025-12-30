@@ -22,10 +22,18 @@
 #include <vector>
 
 #if defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #elif defined(HAVE_X11)
 #include <GL/glx.h>
 #include <X11/Xlib.h>
+#endif
+#if !defined(_WIN32)
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #endif
 
 #include "Common/Buffer.h"
@@ -36,6 +44,7 @@
 #include "Common/IniFile.h"
 #include "Common/Logging/LogManager.h"
 #include "Common/MsgHandler.h"
+#include "Common/SocketContext.h"
 #include "Common/StringUtil.h"
 #include "Common/Version.h"
 #include "AudioCommon/LibretroSoundStream.h"
@@ -348,6 +357,12 @@ NetPlayLanMode GetNetPlayLanMode()
   return NetPlayLanMode::Disabled;
 }
 
+bool IsNetPlayLanAutoPortEnabled()
+{
+  const char* value = GetCoreOptionValue("dolphin_netplay_lan_auto_port");
+  return value && std::string_view(value) == "enabled";
+}
+
 NetPlayMode GetNetPlayMode()
 {
   const NetPlayLanMode lan_mode = GetNetPlayLanMode();
@@ -366,6 +381,77 @@ NetPlayMode GetNetPlayMode()
     return NetPlayMode::Join;
 
   return NetPlayMode::Disabled;
+}
+
+bool IsUdpPortAvailable(u16 port)
+{
+  if (port == 0)
+    return false;
+
+  Common::SocketContext socket_context;
+#if defined(_WIN32)
+  SOCKET sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (sock == INVALID_SOCKET)
+    return false;
+
+  const BOOL exclusive = TRUE;
+  setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+             reinterpret_cast<const char*>(&exclusive), sizeof(exclusive));
+
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_port = htons(port);
+  const int result = bind(sock, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
+  closesocket(sock);
+  return result == 0;
+#else
+  const int sock = socket(AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0)
+    return false;
+
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_port = htons(port);
+  const int result = bind(sock, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
+  close(sock);
+  return result == 0;
+#endif
+}
+
+std::optional<u16> FindAvailableUdpPort(u16 base_port, u16 range)
+{
+  if (base_port == 0)
+    return std::nullopt;
+
+  for (u16 offset = 0; offset <= range; ++offset)
+  {
+    const u16 port = static_cast<u16>(base_port + offset);
+    if (port < base_port)
+      break;
+    if (IsUdpPortAvailable(port))
+      return port;
+  }
+
+  return std::nullopt;
+}
+
+std::optional<u16> FindInUseUdpPort(u16 base_port, u16 range)
+{
+  if (base_port == 0)
+    return std::nullopt;
+
+  for (u16 offset = 0; offset <= range; ++offset)
+  {
+    const u16 port = static_cast<u16>(base_port + offset);
+    if (port < base_port)
+      break;
+    if (!IsUdpPortAvailable(port))
+      return port;
+  }
+
+  return std::nullopt;
 }
 
 NetPlayConnection GetNetPlayConnection()
@@ -463,7 +549,7 @@ std::vector<std::string> BuildNetPlayPortValues(u16 configured)
   };
 
   add_port(configured);
-  add_port(2626);
+  add_port(43210);
 
   for (int delta = -2; delta <= 2; ++delta)
   {
@@ -995,7 +1081,7 @@ void BuildCoreOptions(bool use_current_values = false)
   s_core_options.clear();
   s_core_option_strings.clear();
 
-  constexpr size_t option_count = 42;
+  constexpr size_t option_count = 43;
   s_core_options.reserve(option_count + 1);
   s_core_option_strings.reserve(option_count);
 
@@ -1061,6 +1147,9 @@ void BuildCoreOptions(bool use_current_values = false)
   AddCoreOption("dolphin_netplay_lan_mode", "NetPlay LAN mode (localhost)",
                 {"disabled", "host", "join"},
                 GetOptionDefault("dolphin_netplay_lan_mode", "disabled", use_current_values));
+  AddCoreOption("dolphin_netplay_lan_auto_port", "NetPlay LAN auto port (scan localhost)",
+                {"disabled", "enabled"},
+                GetOptionDefault("dolphin_netplay_lan_auto_port", "disabled", use_current_values));
   AddCoreOption("dolphin_netplay_mode", "NetPlay mode", {"disabled", "host", "join"},
                 GetOptionDefault("dolphin_netplay_mode", "disabled", use_current_values));
   AddCoreOption("dolphin_netplay_connection", "NetPlay connection",
@@ -1366,9 +1455,47 @@ bool ApplyNetPlayOptions()
   const NetPlayLanMode lan_mode = GetNetPlayLanMode();
   if (lan_mode != NetPlayLanMode::Disabled)
   {
+    if (IsNetPlayLanAutoPortEnabled())
+    {
+      constexpr u16 kLanAutoPortRange = 16;
+      const u16 base_port = Config::Get(Config::NETPLAY_HOST_PORT);
+      if (lan_mode == NetPlayLanMode::Host)
+      {
+        if (const auto port = FindAvailableUdpPort(base_port, kLanAutoPortRange))
+        {
+          if (*port != Config::Get(Config::NETPLAY_HOST_PORT))
+          {
+            Config::SetCurrent(Config::NETPLAY_HOST_PORT, *port);
+            Config::SetCurrent(Config::NETPLAY_CONNECT_PORT, *port);
+            LogMessage(RETRO_LOG_INFO, "NetPlay LAN auto port selected (host): %u\n", *port);
+            changed = true;
+          }
+        }
+      }
+      else if (lan_mode == NetPlayLanMode::Join)
+      {
+        if (const auto port = FindInUseUdpPort(base_port, kLanAutoPortRange))
+        {
+          if (*port != Config::Get(Config::NETPLAY_CONNECT_PORT))
+          {
+            Config::SetCurrent(Config::NETPLAY_CONNECT_PORT, *port);
+            Config::SetCurrent(Config::NETPLAY_HOST_PORT, *port);
+            LogMessage(RETRO_LOG_INFO, "NetPlay LAN auto port selected (join): %u\n", *port);
+            changed = true;
+          }
+        }
+      }
+    }
+
     if (Config::Get(Config::NETPLAY_ADDRESS) != "127.0.0.1")
     {
       Config::SetCurrent(Config::NETPLAY_ADDRESS, "127.0.0.1");
+      changed = true;
+    }
+    const u16 host_port = Config::Get(Config::NETPLAY_HOST_PORT);
+    if (host_port != 0 && Config::Get(Config::NETPLAY_CONNECT_PORT) != host_port)
+    {
+      Config::SetCurrent(Config::NETPLAY_CONNECT_PORT, host_port);
       changed = true;
     }
     if (Config::Get(Config::NETPLAY_USE_INDEX))
